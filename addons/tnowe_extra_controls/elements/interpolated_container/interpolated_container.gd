@@ -11,16 +11,16 @@ extends Container
 ## Emitted when a node was dragged to be rearranged via [member allow_drag_reorder], every time the child order changes.
 signal order_changed()
 ## Emitted if [member allow_drag_reorder] enabled, when a node was grabbed to be rearranged, once.
-signal drag_started(node : Control)
+signal drag_started(node: Control)
 ## Emitted if [member allow_drag_reorder] enabled, when a node was placed down after dragging, once. [br]
 ## [b]Note:[/b] if transfered into another container, will be emitted by that container.
-signal drag_ended(node : Control)
+signal drag_ended(node: Control)
 ## Emitted if [member allow_drag_reorder] enabled, every time a node is moved by the mouse while being dragged.
-signal drag_moved(node : Control)
+signal drag_moved(node: Control)
 ## Emitted if [member allow_drag_transfer] enabled, once a node is transfered to another container by being dragged.
-signal drag_transfered_out(node : Control, into : InterpolatedContainer)
+signal drag_transfered_out(node: Control, into: InterpolatedContainer)
 ## Emitted if [member allow_drag_insert] enabled, once a node is transfered out of another container by being dragged.
-signal drag_transfered_in(node : Control, from : InterpolatedContainer)
+signal drag_transfered_in(node: Control, from: InterpolatedContainer)
 
 ## Child alignment enum.
 enum ItemAlignment {
@@ -29,8 +29,11 @@ enum ItemAlignment {
 	END,
 }
 
+static var _all_boxes: Array[InterpolatedContainer] = []
+static var _drag_touch_offset: Vector2 = Vector2.ZERO
+
 ## Alignment of the items in the container, when behaviours such as Expand Sizing and Compaction are not active.
-@export var alignment : ItemAlignment:
+@export var alignment: ItemAlignment:
 	set(v):
 		alignment = v
 		queue_sort()
@@ -76,64 +79,31 @@ enum ItemAlignment {
 ## Stores this node's minimum size, calculated from child positions. Must be set from [method _sort_children].
 var cached_minimum_size := Vector2()
 
-static var _all_boxes : Array[InterpolatedContainer] = []
-
-var _drag_insert_condition_exp : Expression
-var _dragging_node : Control
-var _children_xforms_start : Array[Transform2D] = []
-var _children_xforms_end : Array[Transform2D] = []
-var _children_sizes_start : Array[Vector2] = []
-var _children_sizes_end : Array[Vector2] = []
+var _drag_insert_condition_exp: Expression
+var _dragging_node: Control
+var _children_xforms_start: Array[Transform2D] = []
+var _children_xforms_end: Array[Transform2D] = []
+var _children_sizes_start: Array[Vector2] = []
+var _children_sizes_end: Array[Vector2] = []
 var _interp_progress_factor := 0.0
 var _skip_next_reorder := false
-var _affected_by_multi_selection : MultiSelection
+var _affected_by_multi_selection: MultiSelection
 
 
-func _get_minimum_size() -> Vector2:
-	return cached_minimum_size
+func _enter_tree():
+	if allow_drag_insert:
+		_all_boxes.append(self)
 
-## Override to define the behaviour for dragging a node via drag-and-drop rearrangement. [br]
-## Should emit [signal order_changed] if the node's index was successfully changed.
-func _insert_child_at_position(child : Control):
-	pass
 
-## Override to define positions of all child nodes. [br]
-## Must change [member cached_minimum_size] to update own size for parent containers. [br]
-## Must call [method fit_interpolated] on each child to set their position.
-func _sort_children():
-	pass
-
-## Sets the target [Rect2] for a child. It will be smoothly animated to fit into that rect, adhering to [method Control.fit_child_in_rect] constraints.[br]
-## Must be called on each child during [method _sort_children] to set their target position.
-func fit_interpolated(child : Control, rect : Rect2):
-	var child_index : int = child.get_index()
-	var child_start_xform := child.get_global_transform()
-	child_start_xform.origin += child_start_xform.basis_xform(child.size * 0.5)
-
-	_children_xforms_start[child_index] = get_global_transform().affine_inverse() * child_start_xform
-	_children_sizes_start[child_index] = child.size
-	fit_child_in_rect(child, rect)
-	_children_xforms_end[child_index] = Transform2D(Vector2(1, 0), Vector2(0, 1), child.position + child.size * 0.5)
-	_children_sizes_end[child_index] = child.size
-
-## Reorder children by a comparator function, similar to [method Array.sort_custom]. [br]
-## Not to be confused with [method _sort_children], which is a method you must override in a script to define child positions and sizes when the container updates.
-func sort_children_by_expression(expr : Callable):
-	var children := get_children(true)
-	children.sort_custom(expr)
-	for i in children.size():
-		if children[i].get_index() != i:
-			children[i].get_parent().move_child(children[i], i)
-
-## Forcibly releases children that are being dragged.
-func force_release():
-	drag_ended.emit(_dragging_node)
-	_dragging_node = null
-	queue_sort()
+func _ready():
 	set_process_input(false)
+	child_entered_tree.connect(_on_child_entered_tree)
+	child_exiting_tree.connect(_on_child_exiting_tree)
+	for x in get_children(true):
+		_on_child_entered_tree(x)
 
 
-func _process(delta : float):
+func _process(delta: float):
 	if move_time == 0.0:
 		set_process(false)
 		return
@@ -147,7 +117,7 @@ func _process(delta : float):
 		if !children[i] is Control:
 			continue
 
-		var cur_child : Control = children[i]
+		var cur_child: Control = children[i]
 		var child_xform := _children_xforms_start[i].interpolate_with(_children_xforms_end[i], progress_eased)
 		cur_child.size = _children_sizes_start[i].lerp(_children_sizes_end[i], progress_eased)
 		cur_child.position = child_xform.origin - child_xform.basis_xform(cur_child.size * 0.5)
@@ -164,14 +134,14 @@ func _process(delta : float):
 		_affected_by_multi_selection.queue_redraw()
 
 
-func _input(event : InputEvent):
+func _input(event: InputEvent):
 	if _dragging_node == null:
 		set_process_input(false)
 		return
 
 	if event is InputEventMouseMotion && _dragging_node != null:
 		if !(_dragging_node is Draggable):
-			_dragging_node.global_position += event.relative
+			_dragging_node.global_position = get_global_mouse_position() + _drag_touch_offset
 
 		drag_moved.emit(_dragging_node)
 		if allow_drag_reorder:
@@ -204,24 +174,60 @@ func _input(event : InputEvent):
 		set_process_input(false)
 
 
-func _ready():
+## Sets the target [Rect2] for a child. It will be smoothly animated to fit into that rect, adhering to [method Control.fit_child_in_rect] constraints.[br]
+## Must be called on each child during [method _sort_children] to set their target position.
+func fit_interpolated(child: Control, rect: Rect2):
+	var child_index: int = child.get_index()
+	var child_start_xform := child.get_global_transform()
+	child_start_xform.origin += child_start_xform.basis_xform(child.size * 0.5)
+
+	_children_xforms_start[child_index] = get_global_transform().affine_inverse() * child_start_xform
+	_children_sizes_start[child_index] = child.size
+	fit_child_in_rect(child, rect)
+	_children_xforms_end[child_index] = Transform2D(Vector2(1, 0), Vector2(0, 1), child.position + child.size * 0.5)
+	_children_sizes_end[child_index] = child.size
+
+
+## Reorder children by a comparator function, similar to [method Array.sort_custom]. [br]
+## Not to be confused with [method _sort_children], which is a method you must override in a script to define child positions and sizes when the container updates.
+func sort_children_by_expression(expr: Callable):
+	var children := get_children(true)
+	children.sort_custom(expr)
+	for i in children.size():
+		if children[i].get_index() != i:
+			children[i].get_parent().move_child(children[i], i)
+
+
+## Forcibly releases children that are being dragged.
+func force_release():
+	drag_ended.emit(_dragging_node)
+	_dragging_node = null
+	queue_sort()
 	set_process_input(false)
-	child_entered_tree.connect(_on_child_entered_tree)
-	child_exiting_tree.connect(_on_child_exiting_tree)
-	for x in get_children(true):
-		_on_child_entered_tree(x)
 
 
-func _enter_tree():
-	if allow_drag_insert:
-		_all_boxes.append(self)
+func _get_minimum_size() -> Vector2:
+	return cached_minimum_size
+
+
+## Override to define the behaviour for dragging a node via drag-and-drop rearrangement. [br]
+## Should emit [signal order_changed] if the node's index was successfully changed.
+func _insert_child_at_position(child: Control):
+	pass
+
+
+## Override to define positions of all child nodes. [br]
+## Must change [member cached_minimum_size] to update own size for parent containers. [br]
+## Must call [method fit_interpolated] on each child to set their position.
+func _sort_children():
+	pass
 
 
 func _exit_tree():
 	_all_boxes.erase(self)
 
 
-func _notification(what : int):
+func _notification(what: int):
 	if what == NOTIFICATION_SORT_CHILDREN:
 		if _skip_next_reorder:
 			# Skip sort if custom_minimum_size changed when sorting children.
@@ -239,7 +245,7 @@ func _notification(what : int):
 		set_process(true)
 
 
-func _insert_child_in_other(child : Control, mouse_global_position : Vector2):
+func _insert_child_in_other(child: Control, mouse_global_position: Vector2):
 	for x in _all_boxes:
 		if !x.allow_drag_insert || !Rect2(Vector2.ZERO, x.size).has_point(x.get_global_transform().affine_inverse() * mouse_global_position):
 			continue
@@ -265,21 +271,22 @@ func _insert_child_in_other(child : Control, mouse_global_position : Vector2):
 		break
 
 
-func _on_child_entered_tree(x : Node):
+func _on_child_entered_tree(x: Node):
 	if x is Control:
 		x.gui_input.connect(_on_child_gui_input.bind(x))
 
 
-func _on_child_exiting_tree(x : Node):
+func _on_child_exiting_tree(x: Node):
 	if x is Control:
 		x.gui_input.disconnect(_on_child_gui_input)
 
 
-func _on_child_gui_input(event : InputEvent, child : Control):
+func _on_child_gui_input(event: InputEvent, child: Control):
 	if !allow_drag_reorder && !allow_drag_transfer:
 		return
 
 	if event is InputEventMouseButton && event.button_index == MOUSE_BUTTON_LEFT && event.pressed:
 		_dragging_node = child
+		_drag_touch_offset = child.global_position - get_global_mouse_position()
 		drag_started.emit(child)
 		set_process_input(true)

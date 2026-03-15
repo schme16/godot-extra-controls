@@ -285,4 +285,3 @@ func _on_child_gui_input(event : InputEvent, child : Control):
 		_drag_touch_offset = child.global_position - get_global_mouse_position()
 		drag_started.emit(child)
 		set_process_input(true)
-
